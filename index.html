@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rich Emoji RPG</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc;
+            touch-action: none; /* スマホでのスワイプによる画面スクロールを防ぐ */
+            font-family: 'DotGothic16', monospace, sans-serif;
+            overflow: hidden;
+        }
+        
+        /* ゲーム画面全体をまとめるコンテナ */
+        #game-container {
+            max-width: 600px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        /* マップ描画用キャンバス */
+        canvas {
+            display: block;
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            image-rendering: pixelated;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.8), inset 0 0 10px rgba(255,255,255,0.1);
+            border: 4px solid #334155;
+            background-color: #4ade80; /* 草地のベース色 */
+        }
+
+        /* 戦闘画面の背景 (グラデーションとアニメーション) */
+        .battle-bg {
+            background: linear-gradient(135deg, #1e293b, #0f172a);
+            background-size: 200% 200%;
+            animation: gradientBG 5s ease infinite;
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* 敵へのダメージエフェクト（画面揺れ） */
+        .shake {
+            animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+            40%, 60% { transform: translate3d(4px, 0, 0); }
+        }
+        
+        /* プレイヤーがダメージを受けた時の赤いフラッシュ */
+        .flash-red {
+            animation: flashRed 0.3s ease-in-out;
+        }
+        @keyframes flashRed {
+            0% { box-shadow: inset 0 0 0px 0px rgba(220, 38, 38, 0); }
+            50% { box-shadow: inset 0 0 50px 20px rgba(220, 38, 38, 0.8); }
+            100% { box-shadow: inset 0 0 0px 0px rgba(220, 38, 38, 0); }
+        }
+
+        /* ログウィンドウのスクロールバー非表示 */
+        #log-window::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* 操作ボタン */
+        .d-pad-btn {
+            background: linear-gradient(145deg, #334155, #1e293b);
+            box-shadow: 2px 2px 5px #111827, -2px -2px 5px #3f3f46;
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+        .d-pad-btn:active {
+            box-shadow: inset 2px 2px 5px #111827, inset -2px -2px 5px #3f3f46;
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-2 md:p-4">
+
+    <!-- ゲーム全体コンテナ -->
+    <div id="game-container" class="w-full">
+        
+        <!-- ステータスヘッダー -->
+        <div class="bg-slate-800 border-2 border-slate-600 rounded-t-lg p-3 flex justify-between items-center text-sm md:text-base shadow-lg z-10 relative">
+            <div class="flex gap-4 text-emerald-400">
+                <span>LV: <span id="ui-level" class="font-bold text-white">1</span></span>
+                <span>HP: <span id="ui-hp" class="font-bold text-white">50</span>/<span id="ui-maxhp">50</span></span>
+            </div>
+            <div class="flex gap-4 text-amber-400">
+                <span>EXP: <span id="ui-exp" class="font-bold text-white">0</span></span>
+                <span>💰: <span id="ui-gold" class="font-bold text-white">0</span></span>
+            </div>
+        </div>
+
+        <!-- メイン画面（マップキャンバス or 戦闘画面） -->
+        <div class="relative overflow-hidden">
+            <!-- 探索用マップ -->
+            <canvas id="game-map" width="480" height="480"></canvas>
+
+            <!-- メッセージログウィンドウ (下部オーバーレイ) -->
+            <div id="log-window" class="absolute bottom-0 left-0 right-0 h-24 bg-slate-900/90 border-t-2 border-slate-600 p-2 overflow-y-auto text-xs md:text-sm text-slate-300 pointer-events-none transition-opacity duration-300">
+                <div id="log-content" class="space-y-1">
+                    <p class="text-sky-400">冒険が始まった！十字キーで移動しよう。</p>
+                </div>
+            </div>
+
+            <!-- 戦闘画面オーバーレイ -->
+            <div id="battle-screen" class="hidden absolute inset-0 battle-bg flex-col items-center justify-between p-4 z-20 border-4 border-slate-500 rounded-b-lg">
+                <!-- 敵エリア -->
+                <div class="flex flex-col items-center mt-4">
+                    <div id="enemy-sprite" class="text-7xl md:text-8xl filter drop-shadow-xl transition-transform">🐺</div>
+                    <div class="mt-4 bg-slate-800 px-4 py-2 border-2 border-slate-600 rounded-lg text-center min-w-[200px]">
+                        <h2 id="enemy-name" class="text-rose-400 font-bold text-xl">ウルフ</h2>
+                        <div class="w-full bg-slate-900 h-4 rounded mt-2 border border-slate-700 relative overflow-hidden">
+                            <div id="enemy-hp-bar" class="bg-rose-500 h-full w-full transition-all duration-300"></div>
+                        </div>
+                        <p class="text-xs mt-1 text-slate-300">HP: <span id="enemy-hp-text">20/20</span></p>
+                    </div>
+                </div>
+
+                <!-- 戦闘コマンド -->
+                <div id="battle-menu" class="w-full grid grid-cols-2 gap-2 mb-2">
+                    <button onclick="battleAction('attack')" class="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-white py-3 rounded-lg border-2 border-slate-500 font-bold transition">たたかう ⚔️</button>
+                    <button onclick="battleAction('heal')" class="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-emerald-400 py-3 rounded-lg border-2 border-slate-500 font-bold transition">かいふく 💖</button>
+                    <button onclick="battleAction('flee')" class="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-400 py-3 rounded-lg border-2 border-slate-500 font-bold col-span-2 transition">にげる 💨</button>
+                </div>
+            </div>
+
+            <!-- タイトル画面 -->
+            <div id="title-screen" class="absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center z-50 rounded-b-lg">
+                <h1 class="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-600 mb-2 drop-shadow-lg text-center">
+                    EPIC<br>EMOJI QUEST
+                </h1>
+                <p class="text-slate-400 mb-8">〜 絵文字の勇者 〜</p>
+                <button onclick="startGame()" class="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg border-2 border-indigo-400 shadow-[0_0_15px_rgba(79,70,229,0.5)] transition transform hover:scale-105 active:scale-95 animate-pulse">
+                    冒険に出発する
+                </button>
+            </div>
+            
+            <!-- ゲームオーバー画面 -->
+            <div id="game-over-screen" class="hidden absolute inset-0 bg-red-950/95 flex flex-col items-center justify-center z-50 rounded-b-lg">
+                <h1 class="text-5xl font-extrabold text-red-500 mb-4 drop-shadow-[0_0_10px_rgba(220,38,38,0.8)]">全滅した...</h1>
+                <button onclick="resetGame()" class="px-8 py-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-lg border-2 border-slate-500 transition">
+                    最初からやり直す
+                </button>
+            </div>
+            
+            <!-- ゲームクリア画面 -->
+            <div id="game-clear-screen" class="hidden absolute inset-0 bg-amber-600/95 flex flex-col items-center justify-center z-50 rounded-b-lg">
+                <h1 class="text-5xl md:text-6xl font-extrabold text-white mb-4 drop-shadow-[0_0_15px_rgba(255,255,255,0.9)] animate-bounce">GAME CLEAR!</h1>
+                <p class="text-amber-100 font-bold text-lg mb-8 drop-shadow-md">魔王を討ち果たし、世界に平和が戻った！</p>
+                <button onclick="resetGame()" class="px-8 py-3 bg-rose-500 hover:bg-rose-400 text-white font-bold rounded-lg border-2 border-rose-300 shadow-[0_0_15px_rgba(225,29,72,0.8)] transition transform hover:scale-105 active:scale-95">
+                    もう一度遊ぶ
+                </button>
+            </div>
+
+        </div>
+
+        <!-- モバイル用十字キー (PCでも操作可能) -->
+        <div id="controls" class="mt-4 flex flex-col items-center gap-2 mb-4 select-none">
+            <button onmousedown="movePlayer(0, -1)" ontouchstart="movePlayer(0, -1); event.preventDefault()" class="d-pad-btn w-14 h-14 rounded-lg flex items-center justify-center text-2xl text-slate-300">▲</button>
+            <div class="flex gap-2">
+                <button onmousedown="movePlayer(-1, 0)" ontouchstart="movePlayer(-1, 0); event.preventDefault()" class="d-pad-btn w-14 h-14 rounded-lg flex items-center justify-center text-2xl text-slate-300">◀</button>
+                <div class="w-14 h-14 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500">◎</div>
+                <button onmousedown="movePlayer(1, 0)" ontouchstart="movePlayer(1, 0); event.preventDefault()" class="d-pad-btn w-14 h-14 rounded-lg flex items-center justify-center text-2xl text-slate-300">▶</button>
+            </div>
+            <button onmousedown="movePlayer(0, 1)" ontouchstart="movePlayer(0, 1); event.preventDefault()" class="d-pad-btn w-14 h-14 rounded-lg flex items-center justify-center text-2xl text-slate-300">▼</button>
+        </div>
+
+    </div>
+
+    <script>
+        // --- ゲームの基本設定 ---
+        const canvas = document.getElementById('game-map');
+        const ctx = canvas.getContext('2d');
+        
+        const TILE_SIZE = 32; // 1マスのサイズ
+        const COLS = 15;      // マップの横のマス数 (15 * 32 = 480)
+        const ROWS = 15;      // マップの縦のマス数 (15 * 32 = 480)
+
+        // タイルの種類と絵文字
+        const TILES = {
+            GRASS: { id: 0, emoji: '', color: '#4ade80', solid: false }, // 草原は背景色で表現
+            TREE: { id: 1, emoji: '🌲', color: '#22c55e', solid: true },
+            MOUNTAIN: { id: 2, emoji: '⛰️', color: '#64748b', solid: true },
+            WATER: { id: 3, emoji: '💧', color: '#3b82f6', solid: true },
+            CASTLE: { id: 4, emoji: '🏰', color: '#cbd5e1', solid: true } // 回復ポイントにする
+        };
+
+        // --- ゲームステート ---
+        let gameState = 'title'; // 'title', 'explore', 'battle', 'gameover'
+        let map = [];
+        
+        // プレイヤー情報
+        let player = {
+            x: 7,
+            y: 7,
+            level: 1,
+            hp: 50,
+            maxHp: 50,
+            attack: 10,
+            exp: 0,
+            nextExp: 20,
+            gold: 0,
+            defeated: 0 // 倒した敵の数
+        };
+
+        // 敵のデータベース
+        const ENEMY_TYPES = [
+            { name: 'スライム', emoji: '💧', hp: 20, attack: 5, exp: 5, gold: 10, minLevel: 1 },
+            { name: 'ゴブリン', emoji: '👺', hp: 45, attack: 12, exp: 12, gold: 20, minLevel: 2 },
+            { name: 'オオカミ', emoji: '🐺', hp: 70, attack: 18, exp: 25, gold: 35, minLevel: 3 },
+            { name: 'ゴーレム', emoji: '🪨', hp: 120, attack: 25, exp: 50, gold: 80, minLevel: 5 },
+            { name: 'ドラゴン', emoji: '🐉', hp: 300, attack: 40, exp: 200, gold: 500, minLevel: 8 }
+        ];
+
+        // ラスボスのデータ
+        const BOSS = { name: '魔王', emoji: '👾', hp: 150, attack: 25, exp: 1000, gold: 1000 };
+
+        let currentEnemy = null;
+        let isPlayerTurn = true;
+
+        // --- マップ生成 ---
+        function generateMap() {
+            map = [];
+            for (let y = 0; y < ROWS; y++) {
+                let row = [];
+                for (let x = 0; x < COLS; x++) {
+                    // 外枠は海(水)か山
+                    if (x === 0 || x === COLS - 1 || y === 0 || y === ROWS - 1) {
+                        row.push(TILES.WATER.id);
+                    } else if (x === player.x && y === player.y) {
+                        // プレイヤーの初期位置は必ず草地
+                        row.push(TILES.GRASS.id);
+                    } else if (x === 2 && y === 2) {
+                        // お城（回復ポイント）
+                        row.push(TILES.CASTLE.id);
+                    } else {
+                        // ランダム配置 (草地メイン、時々木や山)
+                        const rand = Math.random();
+                        if (rand < 0.15) row.push(TILES.TREE.id);
+                        else if (rand < 0.25) row.push(TILES.MOUNTAIN.id);
+                        else row.push(TILES.GRASS.id);
+                    }
+                }
+                map.push(row);
+            }
+        }
+
+        // --- 描画関連 ---
+        function drawMap() {
+            // 背景クリア（草地の緑）
+            ctx.fillStyle = '#4ade80';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // フォント設定（絵文字描画用）
+            ctx.font = '24px Arial'; // 絵文字が綺麗に表示されるサイズ
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    let tileId = map[y][x];
+                    let drawX = x * TILE_SIZE + TILE_SIZE / 2;
+                    let drawY = y * TILE_SIZE + TILE_SIZE / 2;
+
+                    // 背景色があるタイル
+                    if (tileId === TILES.WATER.id) {
+                        ctx.fillStyle = '#3b82f6';
+                        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    } else if (tileId === TILES.MOUNTAIN.id) {
+                        ctx.fillStyle = '#94a3b8';
+                        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+
+                    // 絵文字の描画
+                    let emoji = '';
+                    if (tileId === TILES.TREE.id) emoji = TILES.TREE.emoji;
+                    else if (tileId === TILES.MOUNTAIN.id) emoji = TILES.MOUNTAIN.emoji;
+                    else if (tileId === TILES.WATER.id) emoji = TILES.WATER.emoji;
+                    else if (tileId === TILES.CASTLE.id) emoji = TILES.CASTLE.emoji;
+
+                    if (emoji) {
+                        ctx.fillText(emoji, drawX, drawY + 2); // 微調整
+                    }
+                }
+            }
+
+            // プレイヤー(勇者)のドット絵を描画 (8x8ピクセルアート)
+            const HERO_PIXELS = [
+                [0,0,1,1,1,1,0,0],
+                [0,1,2,2,2,2,1,0],
+                [1,2,3,3,3,3,2,1],
+                [1,3,1,3,3,1,3,1],
+                [0,1,4,4,4,4,1,0],
+                [0,1,4,4,4,4,1,5],
+                [0,1,1,0,0,1,1,5],
+                [1,1,0,0,0,0,1,1]
+            ];
+            const HERO_PALETTE = {
+                1: '#111827', // 黒(輪郭)
+                2: '#FBBF24', // 金髪
+                3: '#FCA5A5', // 肌色
+                4: '#3B82F6', // 青い鎧
+                5: '#94A3B8'  // 剣（銀色）
+            };
+
+            const pixelSize = TILE_SIZE / 8; // 1ピクセルのサイズを計算
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    const colorIndex = HERO_PIXELS[r][c];
+                    if (colorIndex !== 0) {
+                        ctx.fillStyle = HERO_PALETTE[colorIndex];
+                        ctx.fillRect(player.x * TILE_SIZE + c * pixelSize, player.y * TILE_SIZE + r * pixelSize, pixelSize, pixelSize);
+                    }
+                }
+            }
+        }
+
+        function updateUI() {
+            document.getElementById('ui-level').innerText = player.level;
+            document.getElementById('ui-hp').innerText = player.hp;
+            document.getElementById('ui-maxhp').innerText = player.maxHp;
+            document.getElementById('ui-exp').innerText = player.exp;
+            document.getElementById('ui-gold').innerText = player.gold;
+            
+            // HPが少ない時は赤くする
+            const hpElement = document.getElementById('ui-hp');
+            if (player.hp <= player.maxHp * 0.3) {
+                hpElement.classList.replace('text-white', 'text-rose-400');
+            } else {
+                hpElement.classList.replace('text-rose-400', 'text-white');
+            }
+        }
+
+        function logMessage(msg, colorClass = "text-slate-300") {
+            const logWindow = document.getElementById('log-window');
+            const logContent = document.getElementById('log-content');
+            
+            const p = document.createElement('p');
+            p.innerText = msg;
+            p.className = colorClass;
+            logContent.appendChild(p);
+            
+            // ログが多すぎたら古いものを消す
+            if (logContent.children.length > 30) {
+                logContent.removeChild(logContent.firstChild);
+            }
+            
+            // 一番下にスクロール
+            logWindow.scrollTop = logWindow.scrollHeight;
+        }
+
+        // --- プレイヤー操作 ---
+        function movePlayer(dx, dy) {
+            if (gameState !== 'explore') return;
+
+            let newX = player.x + dx;
+            let newY = player.y + dy;
+
+            // マップ範囲外チェック
+            if (newX < 0 || newX >= COLS || newY < 0 || newY >= ROWS) return;
+
+            // 障害物チェック
+            let targetTileId = map[newY][newX];
+            let isSolid = false;
+            Object.values(TILES).forEach(t => {
+                if (t.id === targetTileId && t.solid) isSolid = true;
+            });
+
+            // お城（回復ポイント）の特別処理
+            if (targetTileId === TILES.CASTLE.id) {
+                if (player.hp < player.maxHp) {
+                    player.hp = player.maxHp;
+                    updateUI();
+                    logMessage("🏰 お城で休んだ。HPが全回復した！", "text-emerald-400 font-bold");
+                } else {
+                    logMessage("🏰 伝説のお城だ。ここは安全だ。");
+                }
+                player.x = newX;
+                player.y = newY;
+                drawMap();
+                return;
+            }
+
+            if (!isSolid) {
+                player.x = newX;
+                player.y = newY;
+                drawMap();
+                
+                // 移動ごとにエンカウント判定 (約10%の確率)
+                if (Math.random() < 0.10) {
+                    startEncounter();
+                }
+            }
+        }
+
+        // キーボード操作
+        document.addEventListener('keydown', (e) => {
+            if (gameState === 'explore') {
+                switch(e.key) {
+                    case 'ArrowUp': movePlayer(0, -1); break;
+                    case 'ArrowDown': movePlayer(0, 1); break;
+                    case 'ArrowLeft': movePlayer(-1, 0); break;
+                    case 'ArrowRight': movePlayer(1, 0); break;
+                }
+            }
+        });
+
+        // --- 戦闘システム ---
+        function startEncounter() {
+            gameState = 'battle';
+            
+            // 敵を3匹以上倒していたら、ラスボスが確定で出現！
+            if (player.defeated >= 3) {
+                currentEnemy = {
+                    name: BOSS.name,
+                    emoji: BOSS.emoji,
+                    maxHp: BOSS.hp,
+                    hp: BOSS.hp,
+                    attack: BOSS.attack,
+                    exp: BOSS.exp,
+                    gold: BOSS.gold,
+                    isBoss: true
+                };
+                logMessage(`⚠️ ついに ${currentEnemy.name} が姿を現した！！`, "text-fuchsia-400 font-bold text-lg");
+            } else {
+                // 通常の敵
+                const possibleEnemies = ENEMY_TYPES.filter(e => e.minLevel <= player.level + 2); // 少し強い敵も出る
+                const template = possibleEnemies[Math.floor(Math.random() * possibleEnemies.length)];
+                
+                // 敵のステータスを少しブレさせる (個体差)
+                currentEnemy = {
+                    name: template.name,
+                    emoji: template.emoji,
+                    maxHp: Math.floor(template.hp * (0.9 + Math.random() * 0.2)),
+                    hp: 0,
+                    attack: Math.floor(template.attack * (0.9 + Math.random() * 0.2)),
+                    exp: template.exp,
+                    gold: template.gold,
+                    isBoss: false
+                };
+                currentEnemy.hp = currentEnemy.maxHp;
+                logMessage(`⚠️ 野生の ${currentEnemy.name} が飛び出してきた！`, "text-amber-400 font-bold");
+            }
+
+            // UI切り替え
+            document.getElementById('battle-screen').classList.remove('hidden');
+            document.getElementById('battle-screen').classList.add('flex');
+            document.getElementById('enemy-sprite').innerText = currentEnemy.emoji;
+            document.getElementById('enemy-name').innerText = currentEnemy.name;
+            updateEnemyHPUI();
+            
+            logMessage(`⚠️ 野生の ${currentEnemy.name} が飛び出してきた！`, "text-amber-400 font-bold");
+            
+            // ボタンを有効化
+            toggleBattleButtons(false);
+            isPlayerTurn = true;
+        }
+
+        function updateEnemyHPUI() {
+            const hpBar = document.getElementById('enemy-hp-bar');
+            const hpText = document.getElementById('enemy-hp-text');
+            const percent = Math.max(0, (currentEnemy.hp / currentEnemy.maxHp) * 100);
+            hpBar.style.width = `${percent}%`;
+            hpText.innerText = `${Math.max(0, currentEnemy.hp)}/${currentEnemy.maxHp}`;
+            
+            if (percent < 30) hpBar.className = "bg-rose-600 h-full transition-all duration-300";
+            else if (percent < 60) hpBar.className = "bg-amber-500 h-full transition-all duration-300";
+            else hpBar.className = "bg-emerald-500 h-full transition-all duration-300";
+        }
+
+        function toggleBattleButtons(disable) {
+            const btns = document.getElementById('battle-menu').querySelectorAll('button');
+            btns.forEach(btn => btn.disabled = disable);
+            if(disable) {
+                document.getElementById('battle-menu').classList.add('opacity-50', 'pointer-events-none');
+            } else {
+                document.getElementById('battle-menu').classList.remove('opacity-50', 'pointer-events-none');
+            }
+        }
+
+        async function battleAction(action) {
+            if (!isPlayerTurn || gameState !== 'battle') return;
+            isPlayerTurn = false;
+            toggleBattleButtons(true);
+
+            // 1. プレイヤーの行動
+            if (action === 'attack') {
+                // ダメージ計算 (少しランダム)
+                const damage = Math.floor(player.attack * (0.8 + Math.random() * 0.4));
+                currentEnemy.hp -= damage;
+                
+                logMessage(`剣で攻撃！ ${currentEnemy.name}に ${damage} のダメージ！`);
+                
+                // 敵の揺れアニメーション
+                const enemySprite = document.getElementById('enemy-sprite');
+                enemySprite.classList.add('shake');
+                setTimeout(() => enemySprite.classList.remove('shake'), 400);
+                
+                updateEnemyHPUI();
+
+                if (currentEnemy.hp <= 0) {
+                    await wait(800);
+                    winBattle();
+                    return; // 敵が死んだら敵のターンは無い
+                }
+            } 
+            else if (action === 'heal') {
+                const healAmount = Math.floor(player.maxHp * 0.4); // 最大HPの40%回復
+                player.hp = Math.min(player.maxHp, player.hp + healAmount);
+                updateUI();
+                logMessage(`魔法で回復！ HPが ${healAmount} 回復した。`, "text-emerald-400");
+            }
+            else if (action === 'flee') {
+                if (Math.random() < 0.5) { // 50%で逃走成功
+                    logMessage("💨 逃げ出した！", "text-slate-400");
+                    await wait(800);
+                    endBattle();
+                    return;
+                } else {
+                    logMessage("💦 逃げられなかった！", "text-rose-400");
+                }
+            }
+
+            await wait(1000); // ターン間の「間」
+
+            // 2. 敵の行動
+            const enemyDamage = Math.max(1, Math.floor(currentEnemy.attack * (0.8 + Math.random() * 0.4)));
+            player.hp -= enemyDamage;
+            updateUI();
+            logMessage(`💥 ${currentEnemy.name}の攻撃！ ${enemyDamage} のダメージを受けた。`, "text-rose-400");
+            
+            // プレイヤーダメージエフェクト
+            document.getElementById('game-container').classList.add('flash-red');
+            setTimeout(() => document.getElementById('game-container').classList.remove('flash-red'), 300);
+
+            if (player.hp <= 0) {
+                await wait(1000);
+                gameOver();
+                return;
+            }
+
+            // 次のターンへ
+            isPlayerTurn = true;
+            toggleBattleButtons(false);
+        }
+
+        async function winBattle() {
+            logMessage(`✨ ${currentEnemy.name} を倒した！`);
+            logMessage(`経験値 ${currentEnemy.exp} と ${currentEnemy.gold} Gを手に入れた。`, "text-amber-400");
+            
+            player.exp += currentEnemy.exp;
+            player.gold += currentEnemy.gold;
+            player.defeated++; // 倒した数をカウント
+            
+            // ラスボスを倒した場合
+            if (currentEnemy.isBoss) {
+                await wait(1000);
+                gameClear();
+                return;
+            }
+            
+            // レベルアップ判定
+            if (player.exp >= player.nextExp) {
+                player.level++;
+                player.exp -= player.nextExp;
+                player.nextExp = Math.floor(player.nextExp * 1.5); // 次の必要経験値上昇
+                
+                // ステータス上昇
+                player.maxHp += Math.floor(5 + Math.random() * 5);
+                player.hp = player.maxHp; // レベルアップで全回復
+                player.attack += Math.floor(2 + Math.random() * 3);
+                
+                await wait(500);
+                logMessage(`🎉 レベルが ${player.level} に上がった！力がみなぎる！`, "text-yellow-300 font-bold text-lg");
+            }
+            
+            updateUI();
+            await wait(1500);
+            endBattle();
+        }
+
+        function endBattle() {
+            document.getElementById('battle-screen').classList.add('hidden');
+            document.getElementById('battle-screen').classList.remove('flex');
+            gameState = 'explore';
+            currentEnemy = null;
+        }
+
+        function gameOver() {
+            gameState = 'gameover';
+            document.getElementById('battle-screen').classList.add('hidden');
+            document.getElementById('battle-screen').classList.remove('flex');
+            document.getElementById('game-over-screen').classList.remove('hidden');
+        }
+
+        function gameClear() {
+            gameState = 'gameclear';
+            document.getElementById('battle-screen').classList.add('hidden');
+            document.getElementById('battle-screen').classList.remove('flex');
+            document.getElementById('game-clear-screen').classList.remove('hidden');
+            document.getElementById('game-clear-screen').classList.add('flex');
+        }
+
+        // --- ゲームフロー管理 ---
+        function startGame() {
+            document.getElementById('title-screen').classList.add('hidden');
+            generateMap();
+            drawMap();
+            updateUI();
+            gameState = 'explore';
+        }
+
+        function resetGame() {
+            // 初期化
+            player = {
+                x: 7, y: 7, level: 1, hp: 50, maxHp: 50,
+                attack: 10, exp: 0, nextExp: 20, gold: 0, defeated: 0
+            };
+            document.getElementById('game-over-screen').classList.add('hidden');
+            document.getElementById('game-clear-screen').classList.add('hidden');
+            document.getElementById('game-clear-screen').classList.remove('flex');
+            document.getElementById('log-content').innerHTML = '<p class="text-sky-400">冒険が始まった！十字キーで移動しよう。</p>';
+            startGame();
+        }
+
+        // ユーティリティ関数
+        function wait(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+    </script>
+</body>
+</html>
