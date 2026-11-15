@@ -256,6 +256,30 @@
                 }
                 map.push(row);
             }
+
+            const visited = new Set([`${player.x},${player.y}`]);
+            const queue = [{ x: player.x, y: player.y }];
+            for (let i = 0; i < queue.length; i++) {
+                const { x, y } = queue[i];
+                for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const nx = x + dx, ny = y + dy;
+                    const key = `${nx},${ny}`;
+                    if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS || visited.has(key)) continue;
+                    if (map[ny][nx] !== TILES.GRASS.id && map[ny][nx] !== TILES.CASTLE.id) continue;
+                    visited.add(key);
+                    queue.push({ x: nx, y: ny });
+                }
+            }
+
+            // 城へ行けない地形だけ、初期位置から通路を開ける。
+            if (!visited.has('2,2')) {
+                let x = player.x, y = player.y;
+                while (x !== 2 || y !== 2) {
+                    if (x !== 2) x += Math.sign(2 - x);
+                    else y += Math.sign(2 - y);
+                    if (map[y][x] !== TILES.CASTLE.id) map[y][x] = TILES.GRASS.id;
+                }
+            }
         }
 
         // --- 描画関連 ---
